@@ -228,6 +228,14 @@ public:
     void SetConstants( UINT RootIndex, DWParam X, DWParam Y );
     void SetConstants( UINT RootIndex, DWParam X, DWParam Y, DWParam Z );
     void SetConstants( UINT RootIndex, DWParam X, DWParam Y, DWParam Z, DWParam W );
+
+    template<class T>
+    void SetConstant(UINT RootIndex, T const& constants)
+    {
+        static_assert(sizeof(T) % sizeof(uint32_t) == 0, "Size of type must be a multiple of 4 bytes");
+        this->SetConstantArray(RootIndex, sizeof(T) / sizeof(uint32_t), &constants);
+    }
+    
     void SetConstantBuffer( UINT RootIndex, D3D12_GPU_VIRTUAL_ADDRESS CBV );
     void SetDynamicConstantBufferView( UINT RootIndex, size_t BufferSize, const void* BufferData );
     void SetBufferSRV( UINT RootIndex, const GpuBuffer& SRV, UINT64 Offset = 0);
