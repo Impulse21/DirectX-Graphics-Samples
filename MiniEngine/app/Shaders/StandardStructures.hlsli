@@ -20,6 +20,8 @@ struct DrawCall
 {
     matrix Transform;
     // ----------------------- (16 bit boundary)
+    
+    uint Flags;
 };
 
 #endif

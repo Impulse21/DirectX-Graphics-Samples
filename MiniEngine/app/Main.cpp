@@ -24,7 +24,7 @@
 #define TINYOBJLOADER_IMPLEMENTATION 
 #include "ThridParty/TinyObj/tinyObjLoader.h"
 
-
+#include <random>
 #include <filesystem>
 
 #include "MeshPrefabs.h"
@@ -36,14 +36,33 @@ using namespace Graphics;
 
 using namespace Math;
 
+/* Distributions */
+std::default_random_engine generator(1);
+
+std::uniform_real_distribution<float> distributionXZ(-55.0, 55.0);
+std::uniform_real_distribution<float> distributionY(-3.0, 0.0);
+std::uniform_real_distribution<float> distributionmaterial(0.3, 0.8);
+std::uniform_real_distribution<float> distributionscale(1.0, 5.0);
+
 BEGIN_CONSTANT_BUFFER(SceneCB)
 	Matrix4 ProjectionMatrix;
 	Matrix4 ViewMatrix;
 	Math::XMFLOAT3 CameriaPosition;
 END_CONSTANT_BUFFER
 
+
+namespace DrawCallFlags
+{
+	enum
+	{
+		kNone = 0,
+		kMultiInstance = 0x01,
+	};
+}
+
 BEGIN_CONSTANT_BUFFER(DrawCall)
-	Matrix4 Transform;
+	Matrix4 Transform = {};
+	uint32_t Flags = DrawCallFlags::kNone;
 END_CONSTANT_BUFFER
 
 
@@ -69,14 +88,29 @@ struct MeshInstance
 	Matrix4 WorldTransform = Matrix4(EIdentityTag::kIdentity);
 };
 
+struct MultiMeshInstance
+{
+	MaterialPtr Material;
+
+	StructuredBuffer VertexBuffer;
+	ByteAddressBuffer IndexBuffer;
+
+	uint32_t IndexCount = 0;
+	uint32_t VertexStride;
+
+	std::vector<Matrix4> Transforms;
+};
+
 namespace RootParameters
 {
 	enum
 	{
 		DrawCallCB,
 		MaterialCB,
+		TransformsCB,
 		SceneDataCB,
 		DirectionLightCB,
+
 		// Textures,
 		NumRootParameters,
 	};
@@ -99,6 +133,8 @@ public:
 private:
 	void CreatePipelineStateObjects();
 
+	void CreateLightsScene();
+
 private:
     
 	RootSignature m_rootSig;
@@ -114,6 +150,7 @@ private:
     {
         Math::Camera Camera;
         std::vector<MeshInstance> MeshInstances;
+		std::vector<MultiMeshInstance> MultiMeshInstances;
     };
 
 
@@ -141,6 +178,7 @@ void SanboxApp::Startup( void )
 	this->m_meshResources = MeshResourceLoader::LoadMesh(baseAssetPath + "cornell_box.obj", this->m_materialResources, baseAssetPath);
 	// this->m_meshResources.emplace_back(MeshPrefabs::CreateCube(2.0f, true));
 
+	
 	this->m_renderScene.MeshInstances.resize(this->m_meshResources.size());
 	for (int i = 0; i < this->m_renderScene.MeshInstances.size(); i++)
 	{
@@ -152,6 +190,8 @@ void SanboxApp::Startup( void )
 		meshInstance.IndexCount = mesh->m_indexData.size();
 		meshInstance.WorldTransform = Matrix4(kIdentity);
 	}
+	
+	// this->CreateLightsScene();
 
 	MotionBlur::Enable = false;
 	TemporalEffects::EnableTAA = false;
@@ -231,6 +271,26 @@ void SanboxApp::RenderScene( void )
 
 			gfxContext.DrawIndexed(meshInstance.IndexCount, 0, 0);
 		}
+
+		for (auto& multiMeshInstance: this->m_renderScene.MultiMeshInstances)
+		{
+			DrawCall d = {};
+			d.Flags = DrawCallFlags::kMultiInstance;
+			
+			gfxContext.SetConstant(RootParameters::DrawCallCB, d);
+
+			gfxContext.SetDynamicSRV(
+				RootParameters::TransformsCB,
+				multiMeshInstance.Transforms.size() * sizeof(Matrix4),
+				multiMeshInstance.Transforms.data());
+
+			auto m = multiMeshInstance.Material;
+			gfxContext.SetDynamicConstantBufferView(RootParameters::MaterialCB, sizeof(*m), m.get());
+			gfxContext.SetIndexBuffer(multiMeshInstance.IndexBuffer.IndexBufferView());
+			gfxContext.SetVertexBuffer(0, multiMeshInstance.VertexBuffer.VertexBufferView());
+			gfxContext.DrawIndexed(multiMeshInstance.IndexCount, 0, 0);
+		}
+		
 	}
 
     gfxContext.Finish();
@@ -244,6 +304,7 @@ void SanboxApp::CreatePipelineStateObjects()
 	this->m_rootSig.Reset(RootParameters::NumRootParameters, 1);
 	this->m_rootSig.InitStaticSampler(0, defaultSamplerDesc, D3D12_SHADER_VISIBILITY_PIXEL);
 	this->m_rootSig[RootParameters::DrawCallCB].InitAsConstants(0, sizeof(DrawCall) / 4);
+	this->m_rootSig[RootParameters::TransformsCB].InitAsBufferSRV(0, D3D12_SHADER_VISIBILITY_VERTEX);
 	this->m_rootSig[RootParameters::MaterialCB].InitAsConstantBuffer(1, D3D12_SHADER_VISIBILITY_PIXEL);
 	this->m_rootSig[RootParameters::SceneDataCB].InitAsConstantBuffer(2);
 	this->m_rootSig[RootParameters::DirectionLightCB].InitAsConstantBuffer(3, D3D12_SHADER_VISIBILITY_PIXEL);
@@ -274,6 +335,46 @@ void SanboxApp::CreatePipelineStateObjects()
 	this->m_modelPSO.SetVertexShader(g_pStandardVS, sizeof(g_pStandardVS));
 	this->m_modelPSO.SetPixelShader(g_pStandardPS, sizeof(g_pStandardPS));
 	this->m_modelPSO.Finalize();
+}
+
+void SanboxApp::CreateLightsScene()
+{
+	this->m_meshResources.push_back(MeshPrefabs::CreatePlane(20.0f, 20.0f));
+	auto floorMesh = this->m_meshResources.back();
+
+	this->m_meshResources.push_back(MeshPrefabs::CreateSphere(2.0f));
+	auto ballMesh = this->m_meshResources.back();
+
+	{
+		MeshInstance floorInstance = {};
+		floorInstance.Material = floorMesh->material;
+		floorInstance.VertexBuffer.Create(L"VertexBuffer", floorMesh->m_vertexData.size(), sizeof(VertexPositionNormalTexture), floorMesh->m_vertexData.data());
+		floorInstance.IndexBuffer.Create(L"IndexBuffer", floorMesh->m_indexData.size(), sizeof(uint16_t), floorMesh->m_indexData.data());
+		floorInstance.IndexCount = floorMesh->m_indexData.size();
+		floorInstance.WorldTransform = Matrix4(kIdentity);
+
+		this->m_renderScene.MeshInstances.emplace_back(floorInstance);
+	}
+
+	{
+		MultiMeshInstance ballInstances = {};
+		ballInstances.Material = floorMesh->material;
+		ballInstances.VertexBuffer.Create(L"VertexBuffer", floorMesh->m_vertexData.size(), sizeof(VertexPositionNormalTexture), floorMesh->m_vertexData.data());
+		ballInstances.IndexBuffer.Create(L"IndexBuffer", floorMesh->m_indexData.size(), sizeof(uint16_t), floorMesh->m_indexData.data());
+		ballInstances.IndexCount = floorMesh->m_indexData.size();
+
+		ballInstances.Transforms.resize(20);
+
+		for (int i = 0; i < ballInstances.Transforms.size(); i++)
+		{
+			float s = distributionscale(generator);
+
+			ballInstances.Transforms[i] = Matrix4(AffineTransform(Matrix3::MakeScale(s, s, s), Vector3(distributionXZ(generator), distributionY(generator), distributionXZ(generator))));
+		}
+
+		this->m_renderScene.MultiMeshInstances.emplace_back(ballInstances);
+	}
+
 }
 
 std::vector<MeshPtr> MeshResourceLoader::LoadMesh(std::string const& filename, std::vector<MaterialPtr>& materials, std::string const& baseDir)

@@ -84,5 +84,15 @@ public:
 	static std::shared_ptr<Mesh> CreateCube(
 		float size,
 		bool rhcoords);
+
+	static MeshPtr CreatePlane(
+		float width = 1,
+		float height = 1,
+		bool rhcoords = false);
+
+	static MeshPtr CreateSphere(
+		float diameter = 1,
+		size_t tesselation = 16,
+		bool rhcoords = false);
 };
 

@@ -79,3 +79,101 @@ std::shared_ptr<Mesh> MeshPrefabs::CreateCube(
     mesh->material->Albedo = { 1.0f, 0.0f, 0.0f, 1.0f };
     return mesh;
 }
+
+MeshPtr MeshPrefabs::CreatePlane(float width, float height, bool rhcoords)
+{
+
+    VertexList vertices =
+    {
+        { XMFLOAT3(-0.5f * width, 0.0f,  0.5f * height), XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(0.0f, 0.0f) }, // 0
+        { XMFLOAT3(0.5f * width, 0.0f,  0.5f * height), XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(1.0f, 0.0f) }, // 1
+        { XMFLOAT3(0.5f * width, 0.0f, -0.5f * height), XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(1.0f, 1.0f) }, // 2
+        { XMFLOAT3(-0.5f * width, 0.0f, -0.5f * height), XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(0.0f, 1.0f) }  // 3
+    };
+
+    IndexList indices =
+    {
+        0, 3, 1, 1, 3, 2
+    };
+
+    MeshPtr mesh = std::make_shared<Mesh>();
+    mesh->m_indexData = indices;
+    mesh->m_vertexData = vertices;
+    mesh->material = std::make_shared<Material>();
+    mesh->material->Albedo = { 1.0f, 0.0f, 0.0f, 1.0f };
+    return mesh;
+}
+
+MeshPtr MeshPrefabs::CreateSphere(float diameter, size_t tesselation, bool rhcoords)
+{
+    if (tesselation < 3)
+    {
+        throw std::out_of_range("tessellation parameter out of range");
+    }
+
+    VertexList vertices;
+    IndexList indices;
+
+    float radius = diameter / 2.0f;
+    size_t verticalSegments = tesselation;
+    size_t horizontalSegments = tesselation * 2;
+
+
+    // Create rings of vertices at progressively higher latitudes.
+    for (size_t i = 0; i <= verticalSegments; i++)
+    {
+        float v = 1 - (float)i / verticalSegments;
+
+        float latitude = (i * XM_PI / verticalSegments) - XM_PIDIV2;
+        float dy, dxz;
+
+        XMScalarSinCos(&dy, &dxz, latitude);
+
+        // Create a single ring of vertices at this latitude.
+        for (size_t j = 0; j <= horizontalSegments; j++)
+        {
+            float u = (float)j / horizontalSegments;
+
+            float longitude = j * XM_2PI / horizontalSegments;
+            float dx, dz;
+
+            XMScalarSinCos(&dx, &dz, longitude);
+
+            dx *= dxz;
+            dz *= dxz;
+
+            Math::Vector3 normal = Math::Vector3(dx, dy, dz);
+            Math::XMFLOAT2 textureCoordinate = { u, v };
+
+            vertices.push_back(VertexPositionNormalTexture(normal * radius, normal, textureCoordinate));
+        }
+    }
+
+    // Fill the index buffer with triangles joining each pair of latitude rings.
+    size_t stride = horizontalSegments + 1;
+    for (size_t i = 0; i < verticalSegments; i++)
+    {
+        for (size_t j = 0; j <= horizontalSegments; j++)
+        {
+            size_t nextI = i + 1;
+            size_t nextJ = (j + 1) % stride;
+
+            indices.push_back(static_cast<uint16_t>(i * stride + j));
+            indices.push_back(static_cast<uint16_t>(nextI * stride + j));
+            indices.push_back(static_cast<uint16_t>(i * stride + nextJ));
+
+            indices.push_back(static_cast<uint16_t>(i * stride + nextJ));
+            indices.push_back(static_cast<uint16_t>(nextI * stride + j));
+            indices.push_back(static_cast<uint16_t>(nextI * stride + nextJ));
+        }
+    }
+
+
+    MeshPtr mesh = std::make_shared<Mesh>();
+    mesh->m_indexData = indices;
+    mesh->m_vertexData = vertices;
+    mesh->material = std::make_shared<Material>();
+    mesh->material->Albedo = { 1.0f, 0.0f, 0.0f, 1.0f };
+
+    return mesh;
+}
