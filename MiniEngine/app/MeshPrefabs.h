@@ -31,16 +31,26 @@ struct VertexPositionNormalTexture
 	{ }
 
 	VertexPositionNormalTexture(
+		Math::XMFLOAT3 const& position,
+		Math::XMFLOAT3 const& normal,
+		DirectX::XMFLOAT2 const& textureCoordinate)
+		: position(position)
+		, normal(normal)
+		, textureCoordinate(textureCoordinate)
+	{ }
+
+	VertexPositionNormalTexture(
 		Math::Vector3 const& position,
 		Math::Vector3 const& normal,
 		DirectX::XMFLOAT2 const& textureCoordinate)
-		: position(position),
-		normal(normal),
-		textureCoordinate(textureCoordinate)
-	{ }
+		: textureCoordinate(textureCoordinate)
+	{ 
+		Math::XMStoreFloat3(&this->position, position);
+		Math::XMStoreFloat3(&this->normal, normal);
+	}
 
-	Math::Vector3 position;
-	Math::Vector3 normal;
+	Math::XMFLOAT3 position;
+	Math::XMFLOAT3 normal;
 	DirectX::XMFLOAT2 textureCoordinate;
 
 	static const int InputElementCount = 3;

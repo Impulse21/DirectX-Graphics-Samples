@@ -32,13 +32,13 @@ VSOutput main(VSInput input)
     VSOutput output;
     
     matrix worldMatrix;
-    if (DrawCallCB.Flags & 1u != 0u)
+    if ((DrawCallCB.Flags & 1u)  != 0u)
     {
-        worldMatrix = DrawCallCB.Transform;
+        worldMatrix = InstanceWorldMatricesSB[input.instanceId];
     }
     else
     {
-        worldMatrix = InstanceWorldMatricesSB[input.instanceId];
+        worldMatrix = DrawCallCB.Transform;
     }
     
     output.positionWS = mul(worldMatrix, float4(input.position, 1.0f));

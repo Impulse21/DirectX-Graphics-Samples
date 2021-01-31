@@ -85,16 +85,21 @@ MeshPtr MeshPrefabs::CreatePlane(float width, float height, bool rhcoords)
 
     VertexList vertices =
     {
-        { XMFLOAT3(-0.5f * width, 0.0f,  0.5f * height), XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(0.0f, 0.0f) }, // 0
-        { XMFLOAT3(0.5f * width, 0.0f,  0.5f * height), XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(1.0f, 0.0f) }, // 1
-        { XMFLOAT3(0.5f * width, 0.0f, -0.5f * height), XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(1.0f, 1.0f) }, // 2
-        { XMFLOAT3(-0.5f * width, 0.0f, -0.5f * height), XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(0.0f, 1.0f) }  // 3
+        { Math::XMFLOAT3(-0.5f * width, 0.0f,  0.5f * height), Math::XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(0.0f, 0.0f) }, // 0
+        { Math::XMFLOAT3(0.5f * width, 0.0f,  0.5f * height), Math::XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(1.0f, 0.0f) }, // 1
+        { Math::XMFLOAT3(0.5f * width, 0.0f, -0.5f * height), Math::XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(1.0f, 1.0f) }, // 2
+        { Math::XMFLOAT3(-0.5f * width, 0.0f, -0.5f * height), Math::XMFLOAT3(0.0f, 1.0f, 0.0f), XMFLOAT2(0.0f, 1.0f) }  // 3
     };
 
     IndexList indices =
     {
         0, 3, 1, 1, 3, 2
     };
+
+    if (rhcoords)
+    {
+        Mesh::ReverseWinding(indices, vertices);
+    }
 
     MeshPtr mesh = std::make_shared<Mesh>();
     mesh->m_indexData = indices;
@@ -168,6 +173,10 @@ MeshPtr MeshPrefabs::CreateSphere(float diameter, size_t tesselation, bool rhcoo
         }
     }
 
+    if (rhcoords)
+    {
+        Mesh::ReverseWinding(indices, vertices);
+    }
 
     MeshPtr mesh = std::make_shared<Mesh>();
     mesh->m_indexData = indices;

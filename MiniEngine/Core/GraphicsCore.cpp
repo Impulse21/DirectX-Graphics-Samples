@@ -308,7 +308,15 @@ void Graphics::Initialize(void)
 #if _DEBUG
     Microsoft::WRL::ComPtr<ID3D12Debug> debugInterface;
     if (SUCCEEDED(D3D12GetDebugInterface(MY_IID_PPV_ARGS(&debugInterface))))
+    {
         debugInterface->EnableDebugLayer();
+        Microsoft::WRL::ComPtr<ID3D12Debug1> spDebugController1;
+        if (SUCCEEDED(debugInterface->QueryInterface(IID_PPV_ARGS(&spDebugController1))))
+        {
+            Utility::Print("WARNING:  Enablind GPU Validation\n");
+            spDebugController1->SetEnableGPUBasedValidation(true);
+        }
+    }
     else
         Utility::Print("WARNING:  Unable to enable D3D12 debug validation layer\n");
 #endif

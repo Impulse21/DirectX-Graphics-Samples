@@ -29,6 +29,8 @@
 
 #include "MeshPrefabs.h"
 
+#include <array>
+
 namespace fs = std::filesystem;
 
 using namespace GameCore;
@@ -36,18 +38,12 @@ using namespace Graphics;
 
 using namespace Math;
 
-/* Distributions */
-std::default_random_engine generator(1);
-
-std::uniform_real_distribution<float> distributionXZ(-55.0, 55.0);
-std::uniform_real_distribution<float> distributionY(-3.0, 0.0);
-std::uniform_real_distribution<float> distributionmaterial(0.3, 0.8);
-std::uniform_real_distribution<float> distributionscale(1.0, 5.0);
-
 BEGIN_CONSTANT_BUFFER(SceneCB)
 	Matrix4 ProjectionMatrix;
 	Matrix4 ViewMatrix;
 	Math::XMFLOAT3 CameriaPosition;
+	uint32_t NumberOmniLights = 0;
+	uint32_t NumberSpotLights = 0;
 END_CONSTANT_BUFFER
 
 
@@ -60,11 +56,12 @@ namespace DrawCallFlags
 	};
 }
 
-BEGIN_CONSTANT_BUFFER(DrawCall)
+#pragma pack(1)
+struct DrawCall
+{
 	Matrix4 Transform = {};
 	uint32_t Flags = DrawCallFlags::kNone;
-END_CONSTANT_BUFFER
-
+};
 
 class MeshResourceLoader
 {
@@ -98,16 +95,40 @@ struct MultiMeshInstance
 	uint32_t IndexCount = 0;
 	uint32_t VertexStride;
 
+	uint32_t NumInstances = 0;
+
 	std::vector<Matrix4> Transforms;
 };
 
+namespace LightType
+{
+	enum : uint32_t
+	{
+		OmniLight,
+		SpotLight,
+		DirectionalLight,
+	};
+}
+
+struct LightInstance
+{
+	DirectX::XMFLOAT3 Position;
+	float radiusSq;
+	DirectX::XMFLOAT3 Colour = { 1.0f, 1.0f, 1.0f };
+
+	uint32_t Type = LightType::OmniLight;
+	DirectX::XMFLOAT3 ConeDirection = {};
+	DirectX::XMFLOAT3 ConeAngles = {};
+
+};
 namespace RootParameters
 {
 	enum
 	{
 		DrawCallCB,
 		MaterialCB,
-		TransformsCB,
+		TransformsSRV,
+		LightDataSRV,
 		SceneDataCB,
 		DirectionLightCB,
 
@@ -133,7 +154,7 @@ public:
 private:
 	void CreatePipelineStateObjects();
 
-	void CreateLightsScene();
+	void CreateLightsScene(size_t numberOfLights, size_t NumOfSpheres = 20);
 
 private:
     
@@ -151,6 +172,9 @@ private:
         Math::Camera Camera;
         std::vector<MeshInstance> MeshInstances;
 		std::vector<MultiMeshInstance> MultiMeshInstances;
+		std::vector<LightInstance> OmniLights;
+
+		std::vector<MeshInstance> DebugLights;
     };
 
 
@@ -161,6 +185,29 @@ private:
 
 CREATE_APPLICATION( SanboxApp )
 
+
+/* Distributions */
+std::default_random_engine generator(1);
+
+std::uniform_real_distribution<float> distributionXZ(-55.0, 55.0);
+std::uniform_real_distribution<float> distributionY(0.0, 3.0);
+std::uniform_real_distribution<float> distributionmaterial(0.3, 0.8);
+std::uniform_real_distribution<float> distributionscale(1.0, 5.0);
+
+std::uniform_real_distribution<float> distributionradius(10.0, 15.0);
+std::uniform_real_distribution<float> distributionlightY(1.0, 2.0);
+
+std::array<float, 2> intervals = { 0.0, 1.0 };
+std::array<float, 2> weights{ 1500 , 1500.0 };
+std::piecewise_linear_distribution<float> distributionlightcolor(intervals.begin(), intervals.end(), weights.begin());
+
+
+NumVar NumberLights("Application/Lighting/Number Of Lights", 20, 1, 200);
+NumVar DefaultLightHeight("Application/Lighting/Default Y", 5, -200, 200);
+NumVar NumberSphere("Application/Scene/Number Of Spheres", 150, 1, 150);
+
+BoolVar DebugDrawLights("Application/Lighting/Debug Draw Lights", true);
+
 void SanboxApp::Startup( void )
 {
 	this->CreatePipelineStateObjects();
@@ -170,28 +217,15 @@ void SanboxApp::Startup( void )
 	this->m_renderScene.Camera.SetEyeAtUp(eye, Math::Vector3(0.0f, 1.0f, 0.0f), Vector3(kYUnitVector));
     this->m_renderScene.Camera.SetZRange(1.0f, 10000.0f);
 	this->m_renderScene.Camera.Update();
-	// this->m_cameraController.reset(new CameraController(this->m_renderScene.Camera, Vector3(kYUnitVector)));
+	this->m_cameraController.reset(new CameraController(this->m_renderScene.Camera, Vector3(kYUnitVector)));
+	this->m_cameraController->SlowMovement(true);
 
 	// Load Meshes
-	std::string baseAssetPath(fs::current_path().u8string() + "\\Assets\\Models\\CornellBox\\");
+	// std::string baseAssetPath(fs::current_path().u8string() + "\\Assets\\Models\\CornellBox\\");
 
-	this->m_meshResources = MeshResourceLoader::LoadMesh(baseAssetPath + "cornell_box.obj", this->m_materialResources, baseAssetPath);
-	// this->m_meshResources.emplace_back(MeshPrefabs::CreateCube(2.0f, true));
+	// this->m_meshResources = MeshResourceLoader::LoadMesh(baseAssetPath + "cornell_box.obj", this->m_materialResources, baseAssetPath);
 
-	
-	this->m_renderScene.MeshInstances.resize(this->m_meshResources.size());
-	for (int i = 0; i < this->m_renderScene.MeshInstances.size(); i++)
-	{
-		auto& mesh = this->m_meshResources[i];
-		MeshInstance& meshInstance = this->m_renderScene.MeshInstances[i];
-		meshInstance.Material = mesh->material;
-		meshInstance.VertexBuffer.Create(L"VertexBuffer", mesh->m_vertexData.size(), sizeof(VertexPositionNormalTexture), mesh->m_vertexData.data());
-		meshInstance.IndexBuffer.Create(L"IndexBuffer", mesh->m_indexData.size(), sizeof(uint16_t), mesh->m_indexData.data());
-		meshInstance.IndexCount = mesh->m_indexData.size();
-		meshInstance.WorldTransform = Matrix4(kIdentity);
-	}
-	
-	// this->CreateLightsScene();
+	this->CreateLightsScene(NumberLights, NumberSphere);
 
 	MotionBlur::Enable = false;
 	TemporalEffects::EnableTAA = false;
@@ -210,11 +244,12 @@ void SanboxApp::Cleanup( void )
 {
 	for (int i = 0; i < this->m_renderScene.MeshInstances.size(); i++)
 	{
-		auto& mesh = this->m_meshResources[i];
 		MeshInstance& meshInstance = this->m_renderScene.MeshInstances[i];
 		meshInstance.VertexBuffer.Destroy();
 		meshInstance.IndexBuffer.Destroy();
 	}
+
+	this->m_meshResources.clear();
 }
 
 void SanboxApp::Update( float deltaT )
@@ -229,7 +264,7 @@ void SanboxApp::Update( float deltaT )
 		Graphics::DebugZoom.Increment();
 	}
 
-	// this->m_cameraController->Update(deltaT);
+	this->m_cameraController->Update(deltaT);
 }
 
 void SanboxApp::RenderScene( void )
@@ -252,11 +287,21 @@ void SanboxApp::RenderScene( void )
 	{
 		ScopedTimer _prof(L"Main Render", gfxContext);
 		SceneCB scene = {};
+
 		XMStoreFloat3(&scene.CameriaPosition, this->m_renderScene.Camera.GetPosition());  ;
 		scene.ProjectionMatrix = this->m_renderScene.Camera.GetProjMatrix();
 		scene.ViewMatrix = this->m_renderScene.Camera.GetViewMatrix();
 
+		scene.NumberOmniLights = this->m_renderScene.OmniLights.size();
+		scene.NumberSpotLights = 0;
+
 		gfxContext.SetDynamicConstantBufferView(RootParameters::SceneDataCB, sizeof(SceneCB), &scene);
+
+		// Set Light Buffer
+		gfxContext.SetDynamicSRV(
+			RootParameters::LightDataSRV,
+			sizeof(LightInstance) * this->m_renderScene.OmniLights.size(),
+			this->m_renderScene.OmniLights.data());
 
 		for (auto& meshInstance : this->m_renderScene.MeshInstances)
 		{
@@ -276,11 +321,12 @@ void SanboxApp::RenderScene( void )
 		{
 			DrawCall d = {};
 			d.Flags = DrawCallFlags::kMultiInstance;
+			d.Transform = Matrix4(kIdentity);
 			
 			gfxContext.SetConstant(RootParameters::DrawCallCB, d);
 
 			gfxContext.SetDynamicSRV(
-				RootParameters::TransformsCB,
+				RootParameters::TransformsSRV,
 				multiMeshInstance.Transforms.size() * sizeof(Matrix4),
 				multiMeshInstance.Transforms.data());
 
@@ -288,9 +334,8 @@ void SanboxApp::RenderScene( void )
 			gfxContext.SetDynamicConstantBufferView(RootParameters::MaterialCB, sizeof(*m), m.get());
 			gfxContext.SetIndexBuffer(multiMeshInstance.IndexBuffer.IndexBufferView());
 			gfxContext.SetVertexBuffer(0, multiMeshInstance.VertexBuffer.VertexBufferView());
-			gfxContext.DrawIndexed(multiMeshInstance.IndexCount, 0, 0);
+			gfxContext.DrawIndexedInstanced(multiMeshInstance.IndexCount, multiMeshInstance.NumInstances, 0, 0, 0);
 		}
-		
 	}
 
     gfxContext.Finish();
@@ -303,9 +348,10 @@ void SanboxApp::CreatePipelineStateObjects()
 
 	this->m_rootSig.Reset(RootParameters::NumRootParameters, 1);
 	this->m_rootSig.InitStaticSampler(0, defaultSamplerDesc, D3D12_SHADER_VISIBILITY_PIXEL);
-	this->m_rootSig[RootParameters::DrawCallCB].InitAsConstants(0, sizeof(DrawCall) / 4);
-	this->m_rootSig[RootParameters::TransformsCB].InitAsBufferSRV(0, D3D12_SHADER_VISIBILITY_VERTEX);
+	this->m_rootSig[RootParameters::DrawCallCB].InitAsConstants(0, sizeof(DrawCall) / sizeof(uint32_t));
 	this->m_rootSig[RootParameters::MaterialCB].InitAsConstantBuffer(1, D3D12_SHADER_VISIBILITY_PIXEL);
+	this->m_rootSig[RootParameters::TransformsSRV].InitAsBufferSRV(0, D3D12_SHADER_VISIBILITY_VERTEX);
+	this->m_rootSig[RootParameters::LightDataSRV].InitAsBufferSRV(1, D3D12_SHADER_VISIBILITY_PIXEL);
 	this->m_rootSig[RootParameters::SceneDataCB].InitAsConstantBuffer(2);
 	this->m_rootSig[RootParameters::DirectionLightCB].InitAsConstantBuffer(3, D3D12_SHADER_VISIBILITY_PIXEL);
 
@@ -337,15 +383,12 @@ void SanboxApp::CreatePipelineStateObjects()
 	this->m_modelPSO.Finalize();
 }
 
-void SanboxApp::CreateLightsScene()
+void SanboxApp::CreateLightsScene(size_t numberOfLights, size_t NumOfSpheres)
 {
-	this->m_meshResources.push_back(MeshPrefabs::CreatePlane(20.0f, 20.0f));
-	auto floorMesh = this->m_meshResources.back();
-
-	this->m_meshResources.push_back(MeshPrefabs::CreateSphere(2.0f));
-	auto ballMesh = this->m_meshResources.back();
-
 	{
+		auto floorMesh = MeshPrefabs::CreatePlane(120.0f, 120.0f, true);
+		floorMesh->material->Albedo = Vector4(0.3f, 0.3f, 0.3f, 1.0f);
+
 		MeshInstance floorInstance = {};
 		floorInstance.Material = floorMesh->material;
 		floorInstance.VertexBuffer.Create(L"VertexBuffer", floorMesh->m_vertexData.size(), sizeof(VertexPositionNormalTexture), floorMesh->m_vertexData.data());
@@ -353,30 +396,67 @@ void SanboxApp::CreateLightsScene()
 		floorInstance.IndexCount = floorMesh->m_indexData.size();
 		floorInstance.WorldTransform = Matrix4(kIdentity);
 
+		this->m_meshResources.push_back(floorMesh);
 		this->m_renderScene.MeshInstances.emplace_back(floorInstance);
 	}
 
+		auto ballMesh = MeshPrefabs::CreateSphere(2.0f, 16, true);
 	{
-		MultiMeshInstance ballInstances = {};
-		ballInstances.Material = floorMesh->material;
-		ballInstances.VertexBuffer.Create(L"VertexBuffer", floorMesh->m_vertexData.size(), sizeof(VertexPositionNormalTexture), floorMesh->m_vertexData.data());
-		ballInstances.IndexBuffer.Create(L"IndexBuffer", floorMesh->m_indexData.size(), sizeof(uint16_t), floorMesh->m_indexData.data());
-		ballInstances.IndexCount = floorMesh->m_indexData.size();
+		this->m_meshResources.push_back(ballMesh);
 
-		ballInstances.Transforms.resize(20);
+			MultiMeshInstance ballInstances = {};
+			ballInstances.Material = ballMesh->material;
+			ballInstances.Material->Albedo = { 0.5f, 0.5f, 0.5f, 1.0f };
+			ballInstances.VertexBuffer.Create(L"VertexBuffer", ballMesh->m_vertexData.size(), sizeof(VertexPositionNormalTexture), ballMesh->m_vertexData.data());
+			ballInstances.IndexBuffer.Create(L"IndexBuffer", ballMesh->m_indexData.size(), sizeof(uint16_t), ballMesh->m_indexData.data());
+			ballInstances.IndexCount = ballMesh->m_indexData.size();
 
-		for (int i = 0; i < ballInstances.Transforms.size(); i++)
-		{
-			float s = distributionscale(generator);
+			ballInstances.NumInstances = NumOfSpheres;
+			ballInstances.Transforms.resize(NumOfSpheres);
+			for (int i = 0; i < NumOfSpheres; i++)
+			{
+				const float s = distributionscale(generator);
+				ballInstances.Transforms[i] = Matrix4(AffineTransform(Matrix3::MakeScale(s, s, s), Vector3(distributionXZ(generator), distributionY(generator), distributionXZ(generator))));
+			}
 
-			ballInstances.Transforms[i] = Matrix4(AffineTransform(Matrix3::MakeScale(s, s, s), Vector3(distributionXZ(generator), distributionY(generator), distributionXZ(generator))));
-		}
-
-		this->m_renderScene.MultiMeshInstances.emplace_back(ballInstances);
+			this->m_renderScene.MultiMeshInstances.emplace_back(ballInstances);
 	}
 
+	{
+		this->m_renderScene.OmniLights.resize(numberOfLights);
+
+		for (int i = 0; i < numberOfLights; i++)
+		{
+			LightInstance& light = this->m_renderScene.OmniLights[i];
+			light.Colour = { distributionlightcolor(generator), distributionlightcolor(generator), distributionlightcolor(generator) };
+			light.Position = { distributionXZ(generator), DefaultLightHeight, distributionXZ(generator) };
+			light.Type = LightType::OmniLight;
+			const float radius = distributionradius(generator);
+			light.radiusSq = radius * radius;
+
+			if (DebugDrawLights)
+			{
+				auto material = std::make_shared<Material>();
+				material->Albedo = Vector4(0.0f);
+				material->Roughness = 0.0f;
+				material->Metalness = 0.0f;
+				material->AmbientOcclusion = 0.0f;
+				material->Emissive = light.Colour;
+
+				MeshInstance debugLightMesh = {};
+				debugLightMesh.Material = material;
+				debugLightMesh.VertexBuffer.Create(L"VertexBuffer", ballMesh->m_vertexData.size(), sizeof(VertexPositionNormalTexture), ballMesh->m_vertexData.data());
+				debugLightMesh.IndexBuffer.Create(L"IndexBuffer", ballMesh->m_indexData.size(), sizeof(uint16_t), ballMesh->m_indexData.data());
+				debugLightMesh.IndexCount = ballMesh->m_indexData.size();
+				debugLightMesh.WorldTransform = Matrix4(AffineTransform(Matrix3::MakeScale(0.3f, 0.3f, 0.3f), light.Position));
+
+				this->m_renderScene.MeshInstances.push_back(debugLightMesh);
+			}
+		}
+	}
 }
 
+#pragma region Mesh Loader functions
 std::vector<MeshPtr> MeshResourceLoader::LoadMesh(std::string const& filename, std::vector<MaterialPtr>& materials, std::string const& baseDir)
 {
     fs::path filePath(filename);
@@ -486,3 +566,5 @@ std::vector<MeshPtr> MeshResourceLoader::LoadFromObjFile(std::string const& file
 
     return meshes;
 }
+
+#pragma endregion
